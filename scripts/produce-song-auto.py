@@ -19,7 +19,7 @@ LOG_FILE = "/tmp/jaopao-music.log"
 # Channel config
 GENRE = "Retro Thai Soul Pop + Lofi Funk"
 MUSIC_PROMPT = "Retro Thai Soul Pop, Lofi Funk, 80 BPM, F#m, Electric Piano Chorus FX, Soft Jazz Drums, Warm Bass, Clean Guitar, Saxophone, Vintage Synth Pad, Smooth Male Thai Vocal, Slow Rap"
-STYLE_PROMPT = "cinematic retro 70s-80s scene, warm golden-hour sunlight, vintage outfit light shirt rolled sleeves dark trousers, Thai wooden architecture, dreamy intimate romantic, shallow depth of field, cinematic lens flare, film grain, warm pastel tones"
+STYLE_PROMPT = "A cinematic retro-inspired scene of a young man sitting quietly at an old wooden table, a single vase of flowers placed beside him. Warm golden-hour sunlight streams through a window, casting soft shadows across the room. He gazes thoughtfully with a nostalgic and melancholic expression, as if reflecting on love and the passage of time. Vintage retro outfit light shirt rolled sleeves dark trousers evoking 70s-80s pop aesthetics. Background softly blurred with hints of old Thai wooden architecture, adding a sense of timelessness. Dreamy intimate romantic, shallow depth of field, cinematic lens flare, subtle film grain, warm pastel amber tones"
 LANGUAGE = "th:80,en:20"
 
 # Song structure template
