@@ -55,7 +55,7 @@ SONG_STRUCTURE = """[Intro] [Lofi Crackle]
 {outro}
 [End]"""
 
-MOODS = ["Warm", "Regretful", "Intimate", "Romantic", "Emotional", "Nostalgic", "Melancholic", "Hopeful", "Bittersweet", "Dreamy"]
+MOODS = ["Warm, Regretful, Intimate, Romantic, Emotional"]  # ผสม 5 mood ทุกเพลง
 
 YOUTUBE_FOOTER = """
 ━━━━━━━━━━━━━━━━━━━
@@ -293,8 +293,8 @@ def main(publish_youtube=True):
     concept = None
     for attempt in range(3):  # Self-Healing: retry 3 ครั้ง
         concept_raw = ask_spark(
-            f"คิดเพลงใหม่ 1 เพลง แนว {GENRE} อารมณ์: {mood}{lesson_prompt}\nตอบ JSON เท่านั้น: {{\"title\": \"ชื่อเพลงไทยที่สอดคล้องกับเนื้อหา\", \"title_en\": \"EnglishTitle\", \"concept\": \"เรื่องราวของเพลง 2-3 ประโยค สอดคล้องกับชื่อ\", \"mood\": \"{mood}\", \"scene\": \"ฉากสำหรับภาพปก 1 ประโยค เช่น ชายนั่งมองดอกไม้ริมหน้าต่าง\"}}",
-            system=f"คุณเป็นโปรดิวเซอร์เพลง {GENRE} ชื่อเพลงต้องสอดคล้องกับ concept ตอบ JSON เท่านั้น"
+            f"คิดเพลงใหม่ 1 เพลง แนว {GENRE} อารมณ์: {mood} ใช้ภาพเปรียบเทียบจากธรรมชาติ (ดอกไม้ ฤดูกาล แสงแดด ฝน ทะเล) เป็นแกนเรื่อง{lesson_prompt}\nตอบ JSON เท่านั้น: {{\"title\": \"ชื่อเพลงไทยที่สอดคล้องกับเนื้อหา\", \"title_en\": \"EnglishTitle\", \"concept\": \"เรื่องราวของเพลง 2-3 ประโยค ใช้ภาพเปรียบเทียบ\", \"mood\": \"{mood}\", \"scene\": \"ฉากสำหรับภาพปก 1 ประโยค\"}}",
+            system=f"คุณเป็นโปรดิวเซอร์เพลง {GENRE} ใช้ภาพเปรียบเทียบ (metaphor) จากธรรมชาติเป็นแกนเรื่อง ชื่อเพลงต้องสอดคล้องกับ concept ตอบ JSON เท่านั้น"
         )
         try:
             if "```" in concept_raw:
@@ -318,26 +318,33 @@ def main(publish_youtube=True):
         f"""เขียนเนื้อเพลง "{concept['title']}"
 concept: {concept['concept']}
 mood: {concept.get('mood', mood)}
-ภาษาไทย 80% อังกฤษ 20%
+ภาษาไทย 75% อังกฤษ 25%
+
+หลักการเขียน:
+- ใช้ภาพเปรียบเทียบ (metaphor) จากธรรมชาติเป็นแกนหลัก
+- Verse เล่าเรื่องนุ่มนวลผ่านภาพ poetic
+- Chorus ต้องมี hook ที่จำง่าย ซ้ำได้
+- Hook อังกฤษ 1 บรรทัดใน Chorus
+- Rap ต้อง poetic ไม่ aggressive ผสมไทย+อังกฤษ
 
 ใช้โครงสร้างนี้เท่านั้น:
 
 [Intro] [Lofi Crackle]
 
 [Verse 1] [Soft | Intimate]
-(4 บรรทัด)
+(4 บรรทัด — เล่าเรื่องผ่าน metaphor)
 
 [Pre-Chorus] [Build | Pads + Guitar]
-(4 บรรทัด)
+(4 บรรทัด — build อารมณ์)
 
 [Chorus] [Smooth | Soulful Hook]
-(4-6 บรรทัด มี hook ภาษาอังกฤษ 1 บรรทัด)
+(4-6 บรรทัด — hook ชัด จำง่าย + 1 บรรทัดอังกฤษ)
 
 [Verse 2] [Medium | Add Drums & Groove]
-(4 บรรทัด)
+(4 บรรทัด — เล่าเรื่องต่อ เพิ่มความลึก)
 
 [Rap] [Slow Cadence | Emotional]
-(6 บรรทัด ผสมไทย+อังกฤษ)
+(6 บรรทัด — poetic ผสมไทย+อังกฤษ ไม่ aggressive)
 
 [Pre-Chorus] [Strings Swell]
 (4 บรรทัด)
@@ -348,14 +355,14 @@ mood: {concept.get('mood', mood)}
 [Bridge] [Saxophone Solo | Soulful | Dreamy]
 
 [Final Chorus] [Epic Soul Release]
-(4-6 บรรทัด)
+(4-6 บรรทัด — variation จาก Chorus หลัก)
 
 [Outro] [Fade | Vinyl Crackle]
-(1-2 บรรทัด)
+(1-2 บรรทัด — จบด้วย hook อังกฤษ)
 [End]
 
 เขียนเนื้อเพลงเลย ห้ามอธิบาย ห้ามพูดอะไรเพิ่ม""",
-        system=f"นักแต่งเพลง {GENRE} เขียนเนื้อเพลงเท่านั้น ห้ามอธิบาย"
+        system=f"นักแต่งเพลง {GENRE} ใช้ภาพเปรียบเทียบจากธรรมชาติ เขียนเนื้อเพลงเท่านั้น ห้ามอธิบาย"
     )
     log(f"  Lyrics: {len(lyrics)} chars")
 
