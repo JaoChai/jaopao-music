@@ -57,6 +57,9 @@ SONG_STRUCTURE = """[Intro] [Lofi Crackle]
 
 MOODS = ["Warm", "Regretful", "Intimate", "Romantic", "Emotional", "Nostalgic", "Melancholic", "Hopeful", "Bittersweet", "Dreamy"]
 
+LESSONS_FILE = "/Users/jaochai/.openclaw/workspace-music/memory/lessons.md"
+EVOLUTION_LOG = "/Users/jaochai/.openclaw/workspace-music/memory/evolution_log.md"
+
 
 def log(msg):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -167,6 +170,53 @@ def poll_suno(task_id):
     return ""
 
 
+def quality_gate(lyrics, concept):
+    """Quality Gate — ตรวจเนื้อเพลงก่อน publish."""
+    required_sections = ["[Verse 1]", "[Chorus]", "[Rap]", "[Bridge]", "[Outro]"]
+    missing = [s for s in required_sections if s not in lyrics]
+
+    if missing:
+        log(f"  Quality Gate: missing sections {missing}")
+        return False, f"missing {missing}"
+
+    if len(lyrics) < 500:
+        log(f"  Quality Gate: lyrics too short ({len(lyrics)} chars)")
+        return False, "lyrics too short"
+
+    title = concept.get("title", "")
+    if not title:
+        return False, "no title"
+
+    return True, "passed"
+
+
+def load_lessons():
+    """Learning Inject — โหลดบทเรียนจาก evolution_log."""
+    lessons = []
+    if os.path.exists(EVOLUTION_LOG):
+        with open(EVOLUTION_LOG, "r") as f:
+            content = f.read()
+            if content.strip():
+                # ดึง pattern ที่คนชอบ/ไม่ชอบ
+                lessons.append(content[-500:])  # ใช้ล่าสุด 500 chars
+
+    if os.path.exists(LESSONS_FILE):
+        with open(LESSONS_FILE, "r") as f:
+            content = f.read()
+            if content.strip():
+                lessons.append(content[-300:])
+
+    return "\n".join(lessons) if lessons else ""
+
+
+def save_lesson(lesson_text):
+    """บันทึกบทเรียนจาก run นี้."""
+    os.makedirs(os.path.dirname(LESSONS_FILE), exist_ok=True)
+    with open(LESSONS_FILE, "a") as f:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+        f.write(f"\n## {ts}\n{lesson_text}\n")
+
+
 def poll_image(task_id):
     """Poll NanoBanana task until done. 15s interval, max 15 polls = 3.75 min."""
     import time
@@ -222,24 +272,35 @@ def main(publish_youtube=True):
         log("❌ Not enough credits! Stopping.")
         return
 
-    # Step 1: Spark คิด Concept + Theme
-    log("Step 1: Concept...")
+    # Step 1: Spark คิด Concept + Theme (with Learning Inject)
+    log("Step 1: Concept (with lessons)...")
     import random
     mood = random.choice(MOODS)
-    concept_raw = ask_spark(
-        f"คิดเพลงใหม่ 1 เพลง แนว {GENRE} อารมณ์: {mood}\nตอบ JSON เท่านั้น: {{\"title\": \"ชื่อเพลงไทยที่สอดคล้องกับเนื้อหา\", \"title_en\": \"EnglishTitle\", \"concept\": \"เรื่องราวของเพลง 2-3 ประโยค สอดคล้องกับชื่อ\", \"mood\": \"{mood}\", \"scene\": \"ฉากสำหรับภาพปก 1 ประโยค เช่น ชายนั่งมองดอกไม้ริมหน้าต่าง\"}}",
-        system=f"คุณเป็นโปรดิวเซอร์เพลง {GENRE} ชื่อเพลงต้องสอดคล้องกับ concept ตอบ JSON เท่านั้น"
-    )
-    try:
-        if "```" in concept_raw:
-            concept_raw = concept_raw.split("```")[1]
-            if concept_raw.startswith("json"):
-                concept_raw = concept_raw[4:]
-        concept = json.loads(concept_raw.strip())
-    except:
-        log(f"Concept parse failed: {concept_raw[:200]}")
-        send_telegram("❌ Music Factory: Concept parse failed")
-        return
+
+    # Learning Inject — ดึงบทเรียนจาก evolution_log
+    lessons = load_lessons()
+    lesson_prompt = f"\n\nบทเรียนจากเพลงก่อนหน้า:\n{lessons}" if lessons else ""
+
+    concept = None
+    for attempt in range(3):  # Self-Healing: retry 3 ครั้ง
+        concept_raw = ask_spark(
+            f"คิดเพลงใหม่ 1 เพลง แนว {GENRE} อารมณ์: {mood}{lesson_prompt}\nตอบ JSON เท่านั้น: {{\"title\": \"ชื่อเพลงไทยที่สอดคล้องกับเนื้อหา\", \"title_en\": \"EnglishTitle\", \"concept\": \"เรื่องราวของเพลง 2-3 ประโยค สอดคล้องกับชื่อ\", \"mood\": \"{mood}\", \"scene\": \"ฉากสำหรับภาพปก 1 ประโยค เช่น ชายนั่งมองดอกไม้ริมหน้าต่าง\"}}",
+            system=f"คุณเป็นโปรดิวเซอร์เพลง {GENRE} ชื่อเพลงต้องสอดคล้องกับ concept ตอบ JSON เท่านั้น"
+        )
+        try:
+            if "```" in concept_raw:
+                concept_raw = concept_raw.split("```")[1]
+                if concept_raw.startswith("json"):
+                    concept_raw = concept_raw[4:]
+            concept = json.loads(concept_raw.strip())
+            break
+        except:
+            log(f"  Concept parse retry {attempt+1}: {concept_raw[:100]}")
+            if attempt == 2:
+                log("Concept parse failed after 3 attempts")
+                send_telegram("❌ Music Factory: Concept parse failed (3 attempts)")
+                save_lesson("Concept parse failed — ปรับ prompt ให้ชัดขึ้น")
+                return
     log(f"  Title: {concept.get('title')} ({concept.get('title_en')})")
 
     # Step 2: Spark เขียนเนื้อเพลงตามโครง
@@ -288,6 +349,25 @@ mood: {concept.get('mood', mood)}
         system=f"นักแต่งเพลง {GENRE} เขียนเนื้อเพลงเท่านั้น ห้ามอธิบาย"
     )
     log(f"  Lyrics: {len(lyrics)} chars")
+
+    # Quality Gate — ตรวจเนื้อเพลงก่อนทำต่อ
+    log("  Quality Gate...")
+    passed, reason = quality_gate(lyrics, concept)
+    if not passed:
+        log(f"  Quality Gate FAILED: {reason} → rewriting...")
+        # Self-Healing: ให้ Spark เขียนใหม่ 1 ครั้ง
+        lyrics = ask_spark(
+            f"เขียนเนื้อเพลงใหม่ \"{concept['title']}\" ให้ครบทุก section: [Verse 1] [Pre-Chorus] [Chorus] [Verse 2] [Rap] [Bridge] [Outro] concept: {concept['concept']} mood: {concept.get('mood', mood)} ภาษาไทย 80% อังกฤษ 20% เขียนเนื้อเพลงเลย ห้ามอธิบาย",
+            system=f"นักแต่งเพลง {GENRE} เขียนเนื้อเพลงเท่านั้น ห้ามอธิบาย"
+        )
+        log(f"  Rewritten lyrics: {len(lyrics)} chars")
+        passed2, reason2 = quality_gate(lyrics, concept)
+        if not passed2:
+            log(f"  Quality Gate FAILED again: {reason2}")
+            save_lesson(f"Lyrics quality failed: {reason} → {reason2}")
+            send_telegram(f"⚠️ Music Factory: Quality Gate failed — {reason2} (ทำต่อด้วย lyrics ที่มี)")
+    else:
+        log("  Quality Gate: PASSED ✅")
 
     # Step 3: Image Prompt ตาม theme + scene
     log("Step 3: Image prompt...")
@@ -468,6 +548,9 @@ mood: {concept.get('mood', mood)}
     # Cleanup
     import shutil
     shutil.rmtree(work_dir, ignore_errors=True)
+
+    # Save lesson from this run
+    save_lesson(f"เพลง: {concept['title']} | mood: {concept.get('mood','')} | lyrics: {len(lyrics)} chars | duration: selected | สำเร็จ")
 
     log(f"🎷🎉 Done! Title: {concept['title']}")
 

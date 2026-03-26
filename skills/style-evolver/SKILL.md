@@ -58,14 +58,27 @@ Channel config ปัจจุบัน:
   "recommended_music_prompt": "music prompt ใหม่ที่ปรับตาม pattern ที่ดี",
   "recommended_style_prompt": "style prompt ใหม่สำหรับรูปปก",
   "confidence": "high/medium/low — ถ้า data น้อยเกินให้ตอบ low",
+  "decision": "PROCEED/REFINE/PIVOT",
+  "decision_reason": "เหตุผลที่เลือก decision นี้",
   "changes_summary": "สรุปสิ่งที่เปลี่ยนจากเดิม 1-2 ประโยค"
 }
 ```
 
-### Step 4: ตัดสินใจ
-- ถ้า confidence = "high" → UPDATE channels อัตโนมัติ
-- ถ้า confidence = "medium" → UPDATE แต่แจ้ง Telegram ให้เจ้านายรู้
-- ถ้า confidence = "low" → ไม่เปลี่ยน แจ้ง Telegram ว่า data ไม่พอ
+### Step 4: ตัดสินใจ (PIVOT/REFINE Decision ตาม AutoResearchClaw)
+
+**PROCEED** — เพลง views ดี style ปัจจุบันใช้ได้:
+- ไม่เปลี่ยนอะไร
+- บันทึกว่า "style ปัจจุบันดี"
+
+**REFINE** — ปรับ params เล็กน้อย:
+- ปรับ music_prompt + style_prompt ตาม pattern ที่ดี
+- confidence >= medium → UPDATE channels
+- confidence = low → ไม่เปลี่ยน
+
+**PIVOT** — เปลี่ยนแนวทาง (ถ้า views ลดลงต่อเนื่อง 2+ สัปดาห์):
+- ปรับ genre/mood/tempo มากขึ้น
+- Max 2 pivots → ถ้า pivot 2 ครั้งแล้วยังไม่ดี → แจ้งเจ้านายตัดสินใจเอง
+- บันทึก pivot_count ใน evolution_log
 
 ### Step 5: UPDATE channels (ถ้า confidence >= medium)
 ```sql
