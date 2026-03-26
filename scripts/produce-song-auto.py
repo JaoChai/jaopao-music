@@ -292,26 +292,14 @@ mood: {concept.get('mood', mood)}
     # Step 3: Image Prompt ตาม theme + scene
     log("Step 3: Image prompt...")
     scene = concept.get("scene", "a young man sitting quietly with flowers")
-    image_prompt = f"{STYLE_PROMPT}, {scene}, inspired by the song \"{concept['title']}\" about {concept['concept']}, album cover art style, 16:9 cinematic"
+    image_prompt = f"{STYLE_PROMPT}, {scene}, {concept['concept']}, album cover art style, 16:9 cinematic, no text, no words, no letters, no typography, no watermark"
 
-    # Step 4: Spark เขียน SEO
-    log("Step 4: SEO...")
-    seo_raw = ask_spark(
-        f"เขียน YouTube SEO สำหรับเพลง \"{concept['title']}\" แนว {GENRE} ตอบ JSON: {{\"seo_title\": \"ชื่อ YouTube ไม่เกิน 100 ตัว + emoji\", \"seo_description\": \"เนื้อเพลง + hashtags\"}}",
-        system="เขียน YouTube SEO ตอบ JSON เท่านั้น"
-    )
-    try:
-        if "```" in seo_raw:
-            seo_raw = seo_raw.split("```")[1]
-            if seo_raw.startswith("json"):
-                seo_raw = seo_raw[4:]
-        seo = json.loads(seo_raw.strip())
-    except:
-        seo = {"seo_title": f"{concept['title']} 🎷 | เจ้าเปา Music", "seo_description": lyrics[:500]}
-    log(f"  SEO title: {seo.get('seo_title','')[:60]}")
+    # Step 4-6: PARALLEL — Suno + SeedDream + SEO พร้อมกัน!
+    log("Step 4-6: Parallel (Suno + Image + SEO)...")
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    # Step 5: Suno V5 สร้างเพลง
-    log("Step 5: Suno V5...")
+    # Launch Suno first (ช้าสุด)
+    log("  → Launching Suno V5...")
     suno_resp = kie_api("/api/v1/generate", {
         "prompt": lyrics[:5000],
         "customMode": True,
@@ -326,35 +314,87 @@ mood: {concept.get('mood', mood)}
         log(f"  Suno failed: {suno_resp}")
         send_telegram("❌ Music Factory: Suno failed")
         return
-    log(f"  Task: {suno_task}")
-    music_url = poll_suno(suno_task)
-    if not music_url:
-        log("  Suno timeout/failed")
-        send_telegram("❌ Music Factory: Suno timeout")
-        return
-    log(f"  ✅ Music: {music_url[:60]}...")
 
-    # Step 6: NanoBanana สร้างรูปปก
-    log("Step 6: NanoBanana...")
+    # Launch Image
+    log("  → Launching SeedDream 5 Lite...")
     img_resp = kie_api("/api/v1/jobs/createTask", {
         "model": "seedream/5-lite-text-to-image",
         "task_type": "text-to-image",
-        "input": {"prompt": image_prompt, "aspect_ratio": "16:9", "quality": "high"},
+        "input": {"prompt": image_prompt, "aspect_ratio": "16:9", "quality": "basic"},
     })
     img_task = img_resp.get("data", {}).get("taskId", "")
-    image_url = poll_image(img_task) if img_task else ""
-    if not image_url:
-        log("  Image failed")
-        send_telegram("❌ Music Factory: Image failed")
-        return
-    log(f"  ✅ Image: {image_url[:60]}...")
+
+    # Run Suno poll + Image poll + SEO in parallel
+    music_url = ""
+    image_url = ""
+    seo = {}
+
+    def do_suno():
+        return poll_suno(suno_task)
+
+    def do_image():
+        return poll_image(img_task) if img_task else ""
+
+    def do_seo():
+        seo_raw = ask_spark(
+            f"เขียน YouTube SEO สำหรับเพลง \"{concept['title']}\" แนว {GENRE} ตอบ JSON: {{\"seo_title\": \"ชื่อ YouTube ไม่เกิน 100 ตัว + emoji\", \"seo_description\": \"เนื้อเพลง + hashtags\"}}",
+            system="เขียน YouTube SEO ตอบ JSON เท่านั้น"
+        )
+        try:
+            if "```" in seo_raw:
+                seo_raw_clean = seo_raw.split("```")[1]
+                if seo_raw_clean.startswith("json"):
+                    seo_raw_clean = seo_raw_clean[4:]
+                return json.loads(seo_raw_clean.strip())
+            return json.loads(seo_raw.strip())
+        except:
+            return {"seo_title": f"{concept['title']} 🎷 | เจ้าเปา Music", "seo_description": lyrics[:500]}
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        future_suno = executor.submit(do_suno)
+        future_image = executor.submit(do_image)
+        future_seo = executor.submit(do_seo)
+
+        seo = future_seo.result()
+        log(f"  ✅ SEO done: {seo.get('seo_title','')[:50]}")
+
+        image_url = future_image.result()
+        if image_url:
+            log(f"  ✅ Image done: {image_url[:60]}...")
+        else:
+            log("  ❌ Image failed")
+            send_telegram("❌ Music Factory: Image failed")
+            return
+
+        music_url = future_suno.result()
+        if music_url:
+            log(f"  ✅ Music done: {music_url[:60]}...")
+        else:
+            log("  ❌ Suno timeout/failed")
+            send_telegram("❌ Music Factory: Suno timeout")
+            return
 
     # Step 7: FFmpeg
     log("Step 7: FFmpeg...")
     import tempfile
     work_dir = tempfile.mkdtemp(prefix="jaopao_")
-    subprocess.run(["curl", "-sL", "-o", f"{work_dir}/music.mp3", music_url], timeout=60)
-    subprocess.run(["curl", "-sL", "-o", f"{work_dir}/cover.jpg", image_url], timeout=60)
+    # Download with retry (KIE server can be slow)
+    for attempt in range(3):
+        try:
+            log(f"  Downloading music (attempt {attempt+1})...")
+            subprocess.run(["curl", "-sL", "--connect-timeout", "30", "--max-time", "180", "-o", f"{work_dir}/music.mp3", music_url], timeout=200)
+            if os.path.getsize(f"{work_dir}/music.mp3") > 1000:
+                break
+        except:
+            log(f"  Download music retry {attempt+1}")
+    for attempt in range(3):
+        try:
+            log(f"  Downloading cover (attempt {attempt+1})...")
+            subprocess.run(["curl", "-sL", "--connect-timeout", "30", "--max-time", "180", "-o", f"{work_dir}/cover.jpg", image_url], timeout=200)
+            if os.path.getsize(f"{work_dir}/cover.jpg") > 1000:
+                break
+        except:
+            log(f"  Download cover retry {attempt+1}")
     result = subprocess.run([
         "ffmpeg", "-loop", "1", "-i", f"{work_dir}/cover.jpg",
         "-i", f"{work_dir}/music.mp3",
@@ -362,7 +402,7 @@ mood: {concept.get('mood', mood)}
         "-c:a", "aac", "-b:a", "192k",
         "-pix_fmt", "yuv420p", "-shortest", "-y",
         f"{work_dir}/output.mp4"
-    ], capture_output=True, timeout=120)
+    ], capture_output=True, timeout=300)
     if not os.path.exists(f"{work_dir}/output.mp4"):
         log("  FFmpeg failed")
         send_telegram("❌ Music Factory: FFmpeg failed")
@@ -379,7 +419,7 @@ mood: {concept.get('mood', mood)}
         "-F", f"file=@{work_dir}/output.mp4",
         "-F", "uploadPath=jaopao",
         "-F", f"fileName={title_en}-{datetime.now().strftime('%Y%m%d')}.mp4"
-    ], capture_output=True, timeout=120)
+    ], capture_output=True, timeout=300)
     try:
         upload_data = json.loads(upload_cmd.stdout)
         video_url = upload_data.get("data", {}).get("downloadUrl", "")
