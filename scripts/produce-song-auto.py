@@ -1,0 +1,438 @@
+#!/usr/bin/env python3
+"""Jaopao Music Factory — Script ควบคุม flow + Spark ทำ creative"""
+
+import json
+import os
+import subprocess
+import urllib.request
+from datetime import datetime
+
+OLLAMA_URL = "http://192.168.1.199:11434"
+MODEL = "qwen3.5:27b"
+KIE_KEY = "26ecfa9d4abd06869689ca28062eb7a9"
+ZERNIO_KEY = "sk_4224145db4a318d50ad22f087f57dcdf64890f11e08944e57aa2acb4119c85af"
+YOUTUBE_ACCOUNT = "69b012a6dc8cab9432c8d81d"
+BOT_TOKEN = "8376969560:AAH2rJtldj8fpLaByB20znOghQAPLgiHUPw"
+OWNER_CHAT_ID = 5611560704
+LOG_FILE = "/tmp/jaopao-music.log"
+
+# Channel config
+GENRE = "Retro Thai Soul Pop + Lofi Funk"
+MUSIC_PROMPT = "Retro Thai Soul Pop, Lofi Funk, 80 BPM, F#m, Electric Piano Chorus FX, Soft Jazz Drums, Warm Bass, Clean Guitar, Saxophone, Vintage Synth Pad, Smooth Male Thai Vocal, Slow Rap"
+STYLE_PROMPT = "cinematic retro 70s-80s scene, warm golden-hour sunlight, vintage outfit light shirt rolled sleeves dark trousers, Thai wooden architecture, dreamy intimate romantic, shallow depth of field, cinematic lens flare, film grain, warm pastel tones"
+LANGUAGE = "th:80,en:20"
+
+# Song structure template
+SONG_STRUCTURE = """[Intro] [Lofi Crackle]
+
+[Verse 1] [Soft | Intimate]
+{verse1}
+
+[Pre-Chorus] [Build | Pads + Guitar]
+{prechorus1}
+
+[Chorus] [Smooth | Soulful Hook]
+{chorus}
+
+[Verse 2] [Medium | Add Drums & Groove]
+{verse2}
+
+[Rap] [Slow Cadence | Emotional]
+{rap}
+
+[Pre-Chorus] [Strings Swell]
+{prechorus2}
+
+[Chorus] [Full | Warm & Emotional]
+{chorus}
+
+[Bridge] [Saxophone Solo | Soulful | Dreamy]
+
+[Final Chorus] [Epic Soul Release]
+{chorus_final}
+
+[Outro] [Fade | Vinyl Crackle]
+{outro}
+[End]"""
+
+MOODS = ["Warm", "Regretful", "Intimate", "Romantic", "Emotional", "Nostalgic", "Melancholic", "Hopeful", "Bittersweet", "Dreamy"]
+
+
+def log(msg):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"{ts} {msg}"
+    with open(LOG_FILE, "a") as f:
+        f.write(line + "\n")
+    print(line)
+
+
+def ask_spark(prompt, system=""):
+    """Ask Spark via Ollama chat API with think:false."""
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    payload = json.dumps({
+        "model": MODEL,
+        "stream": False,
+        "think": False,
+        "options": {"num_ctx": 8192, "num_predict": 1000},
+        "messages": messages,
+    }).encode()
+
+    req = urllib.request.Request(
+        f"{OLLAMA_URL}/api/chat",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    resp = urllib.request.urlopen(req, timeout=180)
+    data = json.loads(resp.read())
+    return data.get("message", {}).get("content", "")
+
+
+def check_credits():
+    """Check KIE credits before starting."""
+    req = urllib.request.Request(
+        "https://api.kie.ai/api/v1/chat/credit",
+        headers={"Authorization": f"Bearer {KIE_KEY}"},
+    )
+    try:
+        resp = urllib.request.urlopen(req, timeout=15)
+        data = json.loads(resp.read())
+        credits = data.get("data", 0)
+        log(f"  KIE Credits: {credits}")
+        if credits < 100:
+            send_telegram(f"⚠️ Music Factory: KIE credits เหลือน้อย! ({credits} credits)")
+            return False
+        return True
+    except:
+        return True  # ถ้าเช็คไม่ได้ ให้ทำต่อ
+
+
+def kie_api(endpoint, payload):
+    """Call KIE API with error handling."""
+    data = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        f"https://api.kie.ai{endpoint}",
+        data=data,
+        headers={"Authorization": f"Bearer {KIE_KEY}", "Content-Type": "application/json"},
+    )
+    try:
+        resp = urllib.request.urlopen(req, timeout=60)
+        return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        error_map = {
+            402: "❌ Credits หมด! เติม credits ที่ kie.ai",
+            429: "⚠️ Rate limit! รอสักครู่แล้วลองใหม่",
+            455: "⚠️ KIE ปิดปรับปรุง (maintenance)",
+            501: "❌ Generation failed!",
+        }
+        msg = error_map.get(e.code, f"❌ KIE API error {e.code}")
+        log(f"  KIE Error: {msg}")
+        send_telegram(f"Music Factory: {msg}")
+        return {"code": e.code, "error": msg}
+
+
+def poll_suno(task_id):
+    """Poll Suno task until done. 15s interval, max 40 polls = 10 min."""
+    import time
+    for i in range(40):
+        time.sleep(15)
+        req = urllib.request.Request(
+            f"https://api.kie.ai/api/v1/generate/record-info?taskId={task_id}",
+            headers={"Authorization": f"Bearer {KIE_KEY}"},
+        )
+        resp = urllib.request.urlopen(req, timeout=30)
+        data = json.loads(resp.read())
+        status = data.get("data", {}).get("status", "PENDING")
+        log(f"  Suno poll {i+1}: {status}")
+        if status == "SUCCESS":
+            songs = data.get("data", {}).get("response", {}).get("sunoData", [])
+            # เลือกเวอร์ชันที่ duration ใกล้ 180 วินาที (3 นาที) ที่สุด
+            best = min(songs, key=lambda s: abs(s.get("duration", 0) - 180)) if songs else {}
+            log(f"  Selected: {best.get('duration',0):.0f}s (from {len(songs)} versions)")
+            return best.get("audioUrl", "")
+        if status == "SENSITIVE_WORD_ERROR":
+            log("  ⚠️ เนื้อเพลงโดนกรอง (sensitive word)")
+            send_telegram("⚠️ Music Factory: เนื้อเพลงโดนกรอง! ต้องแก้เนื้อเพลง")
+            return ""
+        if "FAILED" in status or "ERROR" in status:
+            error_msg = data.get("data", {}).get("errorMessage", status)
+            log(f"  ❌ Suno failed: {error_msg}")
+            send_telegram(f"❌ Music Factory: Suno failed — {error_msg}")
+            return ""
+    log("  ❌ Suno timeout (10 min)")
+    send_telegram("❌ Music Factory: Suno timeout 10 นาที!")
+    return ""
+
+
+def poll_image(task_id):
+    """Poll NanoBanana task until done. 15s interval, max 15 polls = 3.75 min."""
+    import time
+    for i in range(15):
+        time.sleep(15)
+        req = urllib.request.Request(
+            f"https://api.kie.ai/api/v1/jobs/recordInfo?taskId={task_id}",
+            headers={"Authorization": f"Bearer {KIE_KEY}"},
+        )
+        try:
+            resp = urllib.request.urlopen(req, timeout=30)
+            data = json.loads(resp.read())
+        except Exception as e:
+            log(f"  Image poll error: {e}")
+            continue
+        state = data.get("data", {}).get("state", "waiting")
+        fail_msg = data.get("data", {}).get("failMsg", "")
+        log(f"  Image poll {i+1}: {state}")
+        if state == "success":
+            result = data.get("data", {}).get("resultJson", "")
+            if result:
+                r = json.loads(result) if isinstance(result, str) else result
+                urls = r.get("resultUrls", [])
+                return urls[0] if urls else ""
+        if state == "failed":
+            log(f"  ❌ Image failed: {fail_msg}")
+            send_telegram(f"❌ Music Factory: Image failed — {fail_msg}")
+            return ""
+    log("  ❌ Image timeout (3.75 min)")
+    send_telegram("❌ Music Factory: Image timeout!")
+    return ""
+
+
+def send_telegram(text):
+    payload = json.dumps({"chat_id": OWNER_CHAT_ID, "text": text}).encode()
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        urllib.request.urlopen(req, timeout=15)
+    except:
+        pass
+
+
+def main(publish_youtube=True):
+    log("🎷 Starting Jaopao Music Factory...")
+
+    # Step 0: Check credits
+    log("Step 0: Credits check...")
+    if not check_credits():
+        log("❌ Not enough credits! Stopping.")
+        return
+
+    # Step 1: Spark คิด Concept + Theme
+    log("Step 1: Concept...")
+    import random
+    mood = random.choice(MOODS)
+    concept_raw = ask_spark(
+        f"คิดเพลงใหม่ 1 เพลง แนว {GENRE} อารมณ์: {mood}\nตอบ JSON เท่านั้น: {{\"title\": \"ชื่อเพลงไทยที่สอดคล้องกับเนื้อหา\", \"title_en\": \"EnglishTitle\", \"concept\": \"เรื่องราวของเพลง 2-3 ประโยค สอดคล้องกับชื่อ\", \"mood\": \"{mood}\", \"scene\": \"ฉากสำหรับภาพปก 1 ประโยค เช่น ชายนั่งมองดอกไม้ริมหน้าต่าง\"}}",
+        system=f"คุณเป็นโปรดิวเซอร์เพลง {GENRE} ชื่อเพลงต้องสอดคล้องกับ concept ตอบ JSON เท่านั้น"
+    )
+    try:
+        if "```" in concept_raw:
+            concept_raw = concept_raw.split("```")[1]
+            if concept_raw.startswith("json"):
+                concept_raw = concept_raw[4:]
+        concept = json.loads(concept_raw.strip())
+    except:
+        log(f"Concept parse failed: {concept_raw[:200]}")
+        send_telegram("❌ Music Factory: Concept parse failed")
+        return
+    log(f"  Title: {concept.get('title')} ({concept.get('title_en')})")
+
+    # Step 2: Spark เขียนเนื้อเพลงตามโครง
+    log("Step 2: Lyrics...")
+    lyrics = ask_spark(
+        f"""เขียนเนื้อเพลง "{concept['title']}"
+concept: {concept['concept']}
+mood: {concept.get('mood', mood)}
+ภาษาไทย 80% อังกฤษ 20%
+
+ใช้โครงสร้างนี้เท่านั้น:
+
+[Intro] [Lofi Crackle]
+
+[Verse 1] [Soft | Intimate]
+(4 บรรทัด)
+
+[Pre-Chorus] [Build | Pads + Guitar]
+(4 บรรทัด)
+
+[Chorus] [Smooth | Soulful Hook]
+(4-6 บรรทัด มี hook ภาษาอังกฤษ 1 บรรทัด)
+
+[Verse 2] [Medium | Add Drums & Groove]
+(4 บรรทัด)
+
+[Rap] [Slow Cadence | Emotional]
+(6 บรรทัด ผสมไทย+อังกฤษ)
+
+[Pre-Chorus] [Strings Swell]
+(4 บรรทัด)
+
+[Chorus] [Full | Warm & Emotional]
+(เหมือน Chorus แรก)
+
+[Bridge] [Saxophone Solo | Soulful | Dreamy]
+
+[Final Chorus] [Epic Soul Release]
+(4-6 บรรทัด)
+
+[Outro] [Fade | Vinyl Crackle]
+(1-2 บรรทัด)
+[End]
+
+เขียนเนื้อเพลงเลย ห้ามอธิบาย ห้ามพูดอะไรเพิ่ม""",
+        system=f"นักแต่งเพลง {GENRE} เขียนเนื้อเพลงเท่านั้น ห้ามอธิบาย"
+    )
+    log(f"  Lyrics: {len(lyrics)} chars")
+
+    # Step 3: Image Prompt ตาม theme + scene
+    log("Step 3: Image prompt...")
+    scene = concept.get("scene", "a young man sitting quietly with flowers")
+    image_prompt = f"{STYLE_PROMPT}, {scene}, inspired by the song \"{concept['title']}\" about {concept['concept']}, album cover art style, 16:9 cinematic"
+
+    # Step 4: Spark เขียน SEO
+    log("Step 4: SEO...")
+    seo_raw = ask_spark(
+        f"เขียน YouTube SEO สำหรับเพลง \"{concept['title']}\" แนว {GENRE} ตอบ JSON: {{\"seo_title\": \"ชื่อ YouTube ไม่เกิน 100 ตัว + emoji\", \"seo_description\": \"เนื้อเพลง + hashtags\"}}",
+        system="เขียน YouTube SEO ตอบ JSON เท่านั้น"
+    )
+    try:
+        if "```" in seo_raw:
+            seo_raw = seo_raw.split("```")[1]
+            if seo_raw.startswith("json"):
+                seo_raw = seo_raw[4:]
+        seo = json.loads(seo_raw.strip())
+    except:
+        seo = {"seo_title": f"{concept['title']} 🎷 | เจ้าเปา Music", "seo_description": lyrics[:500]}
+    log(f"  SEO title: {seo.get('seo_title','')[:60]}")
+
+    # Step 5: Suno V5 สร้างเพลง
+    log("Step 5: Suno V5...")
+    suno_resp = kie_api("/api/v1/generate", {
+        "prompt": lyrics[:5000],
+        "customMode": True,
+        "instrumental": False,
+        "model": "V5",
+        "style": concept.get("suno_style", MUSIC_PROMPT),
+        "title": concept["title"][:80],
+        "callBackUrl": "https://httpbin.org/post",
+    })
+    suno_task = suno_resp.get("data", {}).get("taskId", "")
+    if not suno_task:
+        log(f"  Suno failed: {suno_resp}")
+        send_telegram("❌ Music Factory: Suno failed")
+        return
+    log(f"  Task: {suno_task}")
+    music_url = poll_suno(suno_task)
+    if not music_url:
+        log("  Suno timeout/failed")
+        send_telegram("❌ Music Factory: Suno timeout")
+        return
+    log(f"  ✅ Music: {music_url[:60]}...")
+
+    # Step 6: NanoBanana สร้างรูปปก
+    log("Step 6: NanoBanana...")
+    img_resp = kie_api("/api/v1/jobs/createTask", {
+        "model": "nano-banana-2",
+        "task_type": "text-to-image",
+        "input": {"prompt": image_prompt, "aspect_ratio": "16:9"},
+    })
+    img_task = img_resp.get("data", {}).get("taskId", "")
+    image_url = poll_image(img_task) if img_task else ""
+    if not image_url:
+        log("  Image failed")
+        send_telegram("❌ Music Factory: Image failed")
+        return
+    log(f"  ✅ Image: {image_url[:60]}...")
+
+    # Step 7: FFmpeg
+    log("Step 7: FFmpeg...")
+    import tempfile
+    work_dir = tempfile.mkdtemp(prefix="jaopao_")
+    subprocess.run(["curl", "-sL", "-o", f"{work_dir}/music.mp3", music_url], timeout=60)
+    subprocess.run(["curl", "-sL", "-o", f"{work_dir}/cover.jpg", image_url], timeout=60)
+    result = subprocess.run([
+        "ffmpeg", "-loop", "1", "-i", f"{work_dir}/cover.jpg",
+        "-i", f"{work_dir}/music.mp3",
+        "-c:v", "libx264", "-tune", "stillimage",
+        "-c:a", "aac", "-b:a", "192k",
+        "-pix_fmt", "yuv420p", "-shortest", "-y",
+        f"{work_dir}/output.mp4"
+    ], capture_output=True, timeout=120)
+    if not os.path.exists(f"{work_dir}/output.mp4"):
+        log("  FFmpeg failed")
+        send_telegram("❌ Music Factory: FFmpeg failed")
+        return
+    size_mb = os.path.getsize(f"{work_dir}/output.mp4") / 1024 / 1024
+    log(f"  ✅ MP4: {size_mb:.1f} MB")
+
+    # Step 8: KIE Upload
+    log("Step 8: Upload...")
+    title_en = concept.get("title_en", "song").replace(" ", "-")
+    upload_cmd = subprocess.run([
+        "curl", "-s", "-X", "POST", "https://kieai.redpandaai.co/api/file-stream-upload",
+        "-H", f"Authorization: Bearer {KIE_KEY}",
+        "-F", f"file=@{work_dir}/output.mp4",
+        "-F", "uploadPath=jaopao",
+        "-F", f"fileName={title_en}-{datetime.now().strftime('%Y%m%d')}.mp4"
+    ], capture_output=True, timeout=120)
+    try:
+        upload_data = json.loads(upload_cmd.stdout)
+        video_url = upload_data.get("data", {}).get("downloadUrl", "")
+    except:
+        video_url = ""
+    if not video_url:
+        log("  Upload failed")
+        send_telegram("❌ Music Factory: Upload failed")
+        return
+    log(f"  ✅ URL: {video_url[:60]}...")
+
+    # Step 9: YouTube (optional)
+    if publish_youtube:
+        log("Step 9: YouTube...")
+        yt_json = json.dumps({
+            "content": seo.get("seo_description", "")[:2000],
+            "title": seo.get("seo_title", concept["title"]),
+            "mediaUrls": [video_url],
+            "platforms": [{"platform": "youtube", "accountId": YOUTUBE_ACCOUNT}],
+        })
+        yt_req = urllib.request.Request(
+            "https://zernio.com/api/v1/posts",
+            data=yt_json.encode(),
+            headers={"Authorization": f"Bearer {ZERNIO_KEY}", "Content-Type": "application/json"},
+        )
+        try:
+            yt_resp = json.loads(urllib.request.urlopen(yt_req, timeout=60).read())
+            yt_status = yt_resp.get("post", {}).get("status", "unknown")
+            log(f"  ✅ YouTube: {yt_status}")
+        except Exception as e:
+            log(f"  YouTube error: {e}")
+    else:
+        log("Step 9: YouTube SKIPPED (test mode)")
+
+    # Step 10: Notify Telegram
+    log("Step 10: Notify...")
+    send_telegram(f"""🎷 เพลงใหม่วันนี้!
+
+ชื่อ: {concept['title']} ({concept.get('title_en','')})
+แนว: {concept.get('mood','')}
+🎵 เพลง: {music_url}
+🖼️ รูปปก: {image_url}
+🎬 วิดีโอ: {video_url}
+📺 YouTube: {'Published' if publish_youtube else 'SKIPPED (test)'}""")
+
+    # Cleanup
+    import shutil
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+    log(f"🎷🎉 Done! Title: {concept['title']}")
+
+
+if __name__ == "__main__":
+    import sys
+    publish = "--publish" in sys.argv
+    main(publish_youtube=publish)
