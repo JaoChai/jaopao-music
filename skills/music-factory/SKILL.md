@@ -1,97 +1,98 @@
 ---
 name: music-factory
-description: ผลิตเพลง AI อัตโนมัติ — Concept → เนื้อเพลง → Suno → รูปปก → FFmpeg → KIE Upload → Zernio YouTube
+description: ผลิตเพลง AI อัตโนมัติ — Script ควบคุม + Spark creative | Parallel pipeline | SeedDream 5 Lite | Suno V5 | Quality Gate + Self-Healing + Learning
 user-invocable: true
 metadata:
   openclaw:
     requires:
-      bins: [curl, ffmpeg]
+      bins: [curl, ffmpeg, python3]
 ---
 
 # Music Factory 🎷
 
-ผลิตเพลงอัตโนมัติสำหรับช่อง YouTube ทำตาม AGENTS.md ทุกขั้นตอน 10 steps
+ผลิตเพลงอัตโนมัติสำหรับช่อง YouTube
+Script: produce-song-auto.py ควบคุม flow + Spark (27b think:false) ทำ creative
 
-## วิธีใช้
-เรียกโดยระบุชื่อช่อง:
-`ผลิตเพลงสำหรับช่อง [ชื่อช่อง]`
+## วิธีทำงาน
+Script ควบคุม (ไม่ใช่ agent ทำเอง):
+- Spark ทำ: concept, เนื้อเพลง, SEO
+- Script ทำ: API calls, format, upload, error handling
 
-## Pipeline 10 Steps
-1. อ่าน channel config จาก DB
-2. Spark คิด concept (JSON: title, concept, mood, tempo, suno_style)
-3. Spark เขียนเนื้อเพลง (Suno format, ภาษาตาม config)
-4. KIE → Suno สร้างเพลง (V5, customMode)
-5. KIE → NanoBanana 2 สร้างรูปปก (16:9)
-6. FFmpeg รวม รูป + เพลง → MP4
-7. KIE Upload → public URL
-8. Spark เขียน YouTube SEO (title, description, tags)
-9. Zernio → YouTube upload
-10. แจ้ง Telegram ให้เจ้านาย
+## Style ช่องเจ้าเปา
+- Genre: Retro Thai Soul Pop + Lofi Funk
+- Tempo: 80 BPM | Key: F#m
+- Vocal: Smooth Male Thai + Slow Rap
+- Instruments: Electric Piano, Jazz Drums, Warm Bass, Guitar, Saxophone, Synth Pad
+- Mood: สุ่มจาก 10 อารมณ์ (Warm, Regretful, Intimate, Romantic, Emotional, Nostalgic, Melancholic, Hopeful, Bittersweet, Dreamy)
+- ภาษา: ไทย 80% อังกฤษ 20%
+
+## โครงเพลง (Template ตายตัว)
+[Intro] Lofi Crackle → [Verse 1] Soft | Intimate → [Pre-Chorus] Build | Pads + Guitar → [Chorus] Smooth | Soulful Hook → [Verse 2] Medium | Drums & Groove → [Rap] Slow Cadence | Emotional → [Pre-Chorus] Strings Swell → [Chorus] Full | Warm → [Bridge] Saxophone Solo → [Final Chorus] Epic Soul Release → [Outro] Fade | Vinyl Crackle
+
+## Pipeline (Parallel)
+
+Step 0: Credits check (< 100 = หยุด)
+Step 1: Concept + Learning Inject (lessons → prompt)
+Step 2: Lyrics + Quality Gate (เช็ค sections + rewrite ถ้า fail)
+Step 3: Image prompt (cinematic retro + scene + no text)
+Step 4-6: PARALLEL ⚡ Suno V5 + SeedDream 5 Lite + SEO
+Step 7: FFmpeg (รูป + เพลง → MP4)
+Step 8: KIE Upload
+Step 9: Zernio → YouTube
+Step 10: Notify Telegram + Save Lesson
 
 ## APIs
 
-### KIE Suno (เพลง)
-- Endpoint: POST https://api.kie.ai/api/v1/generate
-- Auth: Bearer $KIE_API_KEY
-- Params: prompt (lyrics), customMode: true, instrumental: false, model: "V5", style, title
-- Poll: GET https://api.kie.ai/api/v1/generate/record-info?taskId=
+### KIE Suno V5 (เพลง)
+- POST https://api.kie.ai/api/v1/generate
+- Params: prompt (5000 chars max), customMode: true, instrumental: false, model: "V5", style, title (80 chars max)
+- Poll: GET /api/v1/generate/record-info?taskId= (15s interval, max 40 polls)
+- เลือก: duration ใกล้ 180 วินาที
 
-### KIE NanoBanana (รูป)
-- Endpoint: POST https://api.kie.ai/api/v1/jobs/createTask
-- Auth: Bearer $KIE_API_KEY
-- Params: model: "nano-banana-2", task_type: "text-to-image", input: {prompt, aspect_ratio: "16:9"}
-- Poll: GET https://api.kie.ai/api/v1/jobs/recordInfo?taskId=
+### KIE SeedDream 5 Lite (รูป)
+- POST https://api.kie.ai/api/v1/jobs/createTask
+- model: "seedream/5-lite-text-to-image"
+- input: {prompt + "no text no words no letters", aspect_ratio: "16:9", quality: "basic"}
+- Poll: GET /api/v1/jobs/recordInfo?taskId= (15s interval, max 15 polls)
 
-### KIE File Upload
-- Endpoint: POST https://kieai.redpandaai.co/api/file-stream-upload
-- Auth: Bearer $KIE_API_KEY
-- Multipart: file, uploadPath, fileName
-- Returns: downloadUrl (public, 3 days)
+### KIE Upload
+- POST https://kieai.redpandaai.co/api/file-stream-upload
+- Returns: downloadUrl (3 days)
 
 ### Zernio YouTube
-- Endpoint: POST https://zernio.com/api/v1/posts
-- Auth: Bearer $ZERNIO_API_KEY
-- Params: content, title, mediaUrls, platforms: [{platform: "youtube", accountId: "69b012a6dc8cab9432c8d81d"}]
+- POST https://zernio.com/api/v1/posts
+- accountId: 69b012a6dc8cab9432c8d81d
 
-### FFmpeg
-```bash
-ffmpeg -loop 1 -i cover.jpg -i music.mp3 \
-  -c:v libx264 -tune stillimage -c:a aac -b:a 192k \
-  -pix_fmt yuv420p -shortest -y output.mp4
-```
+## AutoResearchClaw Patterns
 
-## Database
-- Neon Project: dawn-frost-22911856
-- channels: config ของแต่ละช่อง
-- songs: เพลงที่สร้าง (status tracking)
+### Quality Gate
+- เช็ค: [Verse 1], [Chorus], [Rap], [Bridge], [Outro] ครบ
+- ความยาว > 500 chars
+- Fail → Spark rewrite 1 ครั้ง
+
+### Self-Healing
+- Concept parse: retry 3 ครั้ง
+- Suno: SENSITIVE_WORD_ERROR → แจ้ง Telegram
+- Download: retry 3 ครั้ง + 180s timeout
+- Error → log + แจ้ง Telegram ทุก type (402/429/455/501)
+
+### Learning Inject
+- อ่าน lessons.jsonl + evolution_log.md
+- ใส่กลับเข้า concept prompt
+- Save lesson หลังทุก run
+
+### PIVOT/REFINE (style-evolver)
+- PROCEED / REFINE / PIVOT
+- Max 2 pivots
+
+## Database (Neon: dawn-frost-22911856)
+- channels: config ช่อง
+- songs: เพลงที่สร้าง
 - jobs: log แต่ละ step
+- feedback: views/likes/comments
+- evolution_log: การปรับ style
 
-## Prompt Templates
-
-### Concept Prompt
-```
-คุณเป็นโปรดิวเซอร์เพลงมืออาชีพ เชี่ยวชาญแนว {genre}
-คิด concept เพลงใหม่ 1 เพลง ไม่ซ้ำกับ: [existing titles]
-แนวเพลง: {music_prompt}
-ตอบ JSON: {title, title_en, concept, mood, tempo, suno_style}
-```
-
-### Lyrics Prompt
-```
-นักแต่งเพลงแนว {genre}
-เขียนเนื้อเพลง "{title}" concept: {concept} mood: {mood} tempo: {tempo}
-ภาษา: {language}
-Format: [Verse] [Chorus] [Bridge] [Saxophone Solo] [Outro]
-ความยาว 3 นาที ห้ามใส่คำอธิบาย
-```
-
-### Image Prompt
-```
-{style_prompt}, inspired by "{title}" about {concept}, album cover art, 16:9 cinematic
-```
-
-### SEO Prompt
-```
-YouTube SEO สำหรับ "{title}" แนว {genre} concept: {concept}
-JSON: {seo_title (≤100 chars + emoji), seo_description (เนื้อเพลง+hashtags), seo_tags}
-```
+## Cron
+- Daily Song: 13:00 (script trigger)
+- Feedback: 20:00
+- Style Evolve: จันทร์ 06:00

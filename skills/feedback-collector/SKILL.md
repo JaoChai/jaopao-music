@@ -1,6 +1,6 @@
 ---
 name: feedback-collector
-description: เก็บ feedback จาก YouTube (views, likes, comments, engagement) ผ่าน Zernio Analytics API แล้วบันทึกลง DB
+description: เก็บ feedback จาก YouTube (views, likes, comments) ผ่าน Zernio Analytics API + บันทึก JSONL lessons
 user-invocable: true
 metadata:
   openclaw:
@@ -10,54 +10,37 @@ metadata:
 
 # Feedback Collector 📊
 
-เก็บ feedback ของเพลงทั้งหมดจาก YouTube อัตโนมัติ
+เก็บ feedback ของเพลงจาก YouTube อัตโนมัติ + บันทึกเป็น JSONL
 
-## วิธีใช้
-เรียกจาก Cron Job: `เก็บ feedback สำหรับช่อง [ชื่อช่อง]`
+## Zernio Analytics API
+- GET https://zernio.com/api/v1/analytics?platform=youtube&account_id=69b012a6dc8cab9432c8d81d
+- Auth: Bearer $ZERNIO_API_KEY
+- ข้อจำกัด: ดึงได้ 100 posts ล่าสุด
+- ต้อง Build + Analytics plan
 
 ## Pipeline
 
-### Step 1: ดึง Analytics จาก Zernio
+### Step 1: ดึง Analytics
 ```bash
-curl -s "https://zernio.com/api/v1/analytics?platform=youtube&account_id=69b012a6dc8cab9432c8d81d&limit=100&source=all&sort_by=date&order=desc" \
+curl -s "https://zernio.com/api/v1/analytics?platform=youtube&account_id=69b012a6dc8cab9432c8d81d&limit=100&sort_by=date&order=desc" \
   -H "Authorization: Bearer $ZERNIO_API_KEY"
 ```
-Response มี posts[].analytics: views, likes, comments, engagementRate
+Response: posts[].analytics: views, likes, comments, engagementRate
 
-### Step 2: จับคู่กับ songs ใน DB
-- ใช้ mcp__neon__run_sql query songs table
-- จับคู่ด้วย title หรือ youtube_url
-- ถ้าเจอ → UPDATE feedback
-
-### Step 3: INSERT/UPDATE feedback table
+### Step 2: บันทึก feedback table (Neon)
 ```sql
 INSERT INTO feedback (song_id, channel_id, views, likes, comments, engagement_rate)
-VALUES ({song_id}, {channel_id}, {views}, {likes}, {comments}, {engagement_rate})
 ```
-- เก็บ snapshot ณ เวลานั้น → ดู trend ได้
 
-### Step 4: สรุปผล
-วิเคราะห์สั้นๆ:
-- เพลงไหน views เพิ่มขึ้นมากสุดวันนี้?
-- เพลงไหน engagement ดีที่สุด?
-- มี comment ใหม่ไหม?
-
-### Step 5: แจ้ง Telegram (ถ้ามีอะไรน่าสนใจ)
-ถ้ามีเพลงที่ views เพิ่มขึ้น > 50 ในวันเดียว หรือมี comment ใหม่:
+### Step 3: บันทึก JSONL lesson (ถ้ามีข้อมูลน่าสนใจ)
+```json
+{"stage": "feedback", "category": "content", "severity": "info", "description": "เพลง X views สูงสุด mood=Romantic", "timestamp": "...", "run_id": "..."}
 ```
-📊 Daily Feedback Report — เจ้าเปา
-🔥 เพลงที่ views เพิ่มมากสุด: {title} (+{delta} views)
-💬 Comments ใหม่: {count}
-📈 Top engagement: {title} ({rate}%)
-```
-ถ้าไม่มีอะไรพิเศษ → ไม่ต้องแจ้ง
 
-## Zernio API
-- Base: https://zernio.com/api/v1
-- Auth: Bearer $ZERNIO_API_KEY
-- Analytics: GET /analytics?platform=youtube&account_id=69b012a6dc8cab9432c8d81d
-- ข้อจำกัด: ดึงได้ 100 posts ล่าสุด
+### Step 4: แจ้ง Telegram (ถ้ามีอะไรพิเศษ)
+- views เพิ่ม > 50 ในวันเดียว
+- comment ใหม่
+- engagement rate สูงผิดปกติ
+- ถ้าไม่มีอะไรพิเศษ → ไม่แจ้ง
 
-## Database
-- Neon Project: dawn-frost-22911856
-- Table: feedback (song_id, views, likes, comments, engagement_rate, collected_at)
+## Cron: ทุกวัน 20:00

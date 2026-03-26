@@ -1,6 +1,6 @@
 ---
 name: style-evolver
-description: วิเคราะห์ feedback ของเพลงทั้งสัปดาห์ แล้วปรับ music_prompt + style_prompt อัตโนมัติ เพื่อให้เพลงถัดไป perform ดีขึ้น
+description: วิเคราะห์ feedback + PIVOT/REFINE decision + ปรับ style อัตโนมัติ ตาม AutoResearchClaw pattern
 user-invocable: true
 metadata:
   openclaw:
@@ -10,21 +10,15 @@ metadata:
 
 # Style Evolver 🧬
 
-วิเคราะห์ performance ของเพลงแล้วปรับ style อัตโนมัติ
-
-## วิธีใช้
-เรียกจาก Cron Job: `วิเคราะห์และปรับ style สำหรับช่อง [ชื่อช่อง]`
+วิเคราะห์ performance แล้วปรับ style อัตโนมัติ ตาม AutoResearchClaw pattern
 
 ## Pipeline
 
-### Step 1: ดึง feedback ย้อนหลัง 7 วัน
+### Step 1: ดึง feedback 7 วันล่าสุด
 ```sql
-SELECT s.title, s.concept, s.lyrics, s.image_prompt,
-       f.views, f.likes, f.comments, f.engagement_rate
-FROM feedback f
-JOIN songs s ON f.song_id = s.id
-WHERE f.channel_id = {channel_id}
-  AND f.collected_at >= NOW() - INTERVAL '7 days'
+SELECT s.title, s.concept, f.views, f.likes, f.comments, f.engagement_rate
+FROM feedback f JOIN songs s ON f.song_id = s.id
+WHERE f.collected_at >= NOW() - INTERVAL '7 days'
 ORDER BY f.views DESC
 ```
 
@@ -33,97 +27,77 @@ ORDER BY f.views DESC
 SELECT genre, music_prompt, style_prompt FROM channels WHERE id = {channel_id}
 ```
 
-### Step 3: Spark วิเคราะห์ Pattern
-Prompt:
-```
-คุณเป็นนักวิเคราะห์ข้อมูล YouTube Music Channel
-วิเคราะห์ data ต่อไปนี้แล้วตอบเป็น JSON:
-
-เพลงที่ perform ดี (views สูง + engagement สูง):
-{top_songs_data}
-
-เพลงที่ perform ไม่ดี (views ต่ำ):
-{bottom_songs_data}
-
-Channel config ปัจจุบัน:
-- genre: {genre}
-- music_prompt: {music_prompt}
-- style_prompt: {style_prompt}
-
-วิเคราะห์และตอบ JSON:
+### Step 3: วิเคราะห์ Pattern (Spark)
+Spark วิเคราะห์แล้วตอบ JSON:
+```json
 {
-  "analysis": "สรุปว่าเพลงแบบไหนคนชอบ แบบไหนไม่ชอบ 3-5 ประโยค",
-  "top_patterns": ["pattern ที่เพลง views สูงมีร่วมกัน"],
-  "weak_patterns": ["pattern ที่เพลง views ต่ำมีร่วมกัน"],
-  "recommended_music_prompt": "music prompt ใหม่ที่ปรับตาม pattern ที่ดี",
-  "recommended_style_prompt": "style prompt ใหม่สำหรับรูปปก",
-  "confidence": "high/medium/low — ถ้า data น้อยเกินให้ตอบ low",
+  "analysis": "สรุป 3-5 ประโยค",
+  "top_patterns": ["pattern ที่เพลง views สูงมี"],
+  "weak_patterns": ["pattern ที่เพลง views ต่ำมี"],
+  "recommended_music_prompt": "prompt ใหม่",
+  "recommended_style_prompt": "style ใหม่",
+  "confidence": "high/medium/low",
   "decision": "PROCEED/REFINE/PIVOT",
-  "decision_reason": "เหตุผลที่เลือก decision นี้",
-  "changes_summary": "สรุปสิ่งที่เปลี่ยนจากเดิม 1-2 ประโยค"
+  "decision_reason": "เหตุผล",
+  "changes_summary": "สรุปสิ่งที่เปลี่ยน"
 }
 ```
 
-### Step 4: ตัดสินใจ (PIVOT/REFINE Decision ตาม AutoResearchClaw)
+### Step 4: PIVOT/REFINE Decision (ตาม AutoResearchClaw)
 
-**PROCEED** — เพลง views ดี style ปัจจุบันใช้ได้:
-- ไม่เปลี่ยนอะไร
-- บันทึกว่า "style ปัจจุบันดี"
+**PROCEED** — style ดี ไม่เปลี่ยน
+- Views ดีขึ้นหรือคงที่
+- บันทึก: "style ปัจจุบันดี"
 
-**REFINE** — ปรับ params เล็กน้อย:
-- ปรับ music_prompt + style_prompt ตาม pattern ที่ดี
+**REFINE** — ปรับ params เล็กน้อย
+- Views ลดลงเล็กน้อย แต่มี pattern ชัด
 - confidence >= medium → UPDATE channels
 - confidence = low → ไม่เปลี่ยน
 
-**PIVOT** — เปลี่ยนแนวทาง (ถ้า views ลดลงต่อเนื่อง 2+ สัปดาห์):
-- ปรับ genre/mood/tempo มากขึ้น
-- Max 2 pivots → ถ้า pivot 2 ครั้งแล้วยังไม่ดี → แจ้งเจ้านายตัดสินใจเอง
-- บันทึก pivot_count ใน evolution_log
+**PIVOT** — เปลี่ยนแนวทาง
+- Views ลดลงต่อเนื่อง 2+ สัปดาห์
+- REFINE ไม่ได้ผล
+- Max 2 pivots → เกิน → แจ้งเจ้านายตัดสินใจ
+
+**Hint Detectors (ป้องกัน infinite loop):**
+- Degenerate: metrics ไม่เปลี่ยน 2 รอบ → force PROCEED
+- Saturation: metrics ดีสุดแล้ว → PROCEED
+- No-improve: ไม่ดีขึ้น 2 รอบ → หยุด
 
 ### Step 5: UPDATE channels (ถ้า confidence >= medium)
 ```sql
-UPDATE channels
-SET music_prompt = '{recommended_music_prompt}',
-    style_prompt = '{recommended_style_prompt}',
-    updated_at = NOW()
-WHERE id = {channel_id}
+UPDATE channels SET music_prompt = '...', style_prompt = '...', updated_at = NOW()
 ```
 
-### Step 6: บันทึก evolution_log
+### Step 6: บันทึก evolution_log + JSONL lesson
 ```sql
-INSERT INTO evolution_log
-(channel_id, old_music_prompt, new_music_prompt, old_style_prompt, new_style_prompt, analysis, reason)
-VALUES ({channel_id}, '{old}', '{new}', '{old}', '{new}', '{analysis}', '{changes_summary}')
+INSERT INTO evolution_log (channel_id, old_music_prompt, new_music_prompt, ...)
+```
+
+JSONL lesson:
+```json
+{"stage": "style_evolve", "category": "content", "severity": "info", "description": "REFINE: ปรับ mood ratio เพิ่ม Romantic 20%", "timestamp": "...", "run_id": "..."}
 ```
 
 ### Step 7: แจ้ง Telegram
 ```
 🧬 Style Evolution Report — เจ้าเปา
-📊 วิเคราะห์จาก {count} เพลง (7 วันล่าสุด)
-
-📈 Pattern ที่คนชอบ:
-{top_patterns}
-
-📉 Pattern ที่ต้องปรับ:
-{weak_patterns}
-
-🔄 สิ่งที่เปลี่ยน:
-{changes_summary}
-
-🎵 Music prompt ใหม่: {new_music_prompt}
-🖼️ Style prompt ใหม่: {new_style_prompt}
-
-Confidence: {confidence}
+📊 วิเคราะห์จาก {count} เพลง
+📈 Top patterns: ...
+📉 Weak patterns: ...
+🔄 Decision: PROCEED/REFINE/PIVOT
+💡 Changes: ...
 ```
 
 ## กฎสำคัญ
-1. ห้ามเปลี่ยน genre หลัก (retro-saxophone-rnb) — ปรับแค่ sub-style
-2. ต้องเก็บ log ทุกครั้งที่เปลี่ยน (evolution_log)
-3. ถ้า data น้อยกว่า 5 เพลง → confidence = low → ไม่เปลี่ยน
-4. ปรับ prompt แบบ incremental ไม่เปลี่ยนหน้ามือเป็นหลังมือ
-5. แจ้ง Telegram ทุกครั้ง
+1. ห้ามเปลี่ยน genre หลัก (Retro Thai Soul Pop + Lofi Funk)
+2. เก็บ log ทุกครั้ง (evolution_log + JSONL)
+3. Data < 5 เพลง → confidence = low → ไม่เปลี่ยน
+4. ปรับ incremental ไม่เปลี่ยนหน้ามือเป็นหลังมือ
+5. Max 2 pivots
 
-## Database
-- Neon Project: dawn-frost-22911856
-- Read: feedback, songs, channels
-- Write: channels (UPDATE), evolution_log (INSERT)
+## Learning Inject
+- lessons จาก JSONL inject กลับเข้า concept prompt รอบถัดไป
+- Decay: half-life 30 วัน, หมดอายุ 90 วัน
+
+## Cron: ทุกจันทร์ 06:00
