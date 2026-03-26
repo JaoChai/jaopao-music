@@ -337,9 +337,9 @@ mood: {concept.get('mood', mood)}
     # Step 6: NanoBanana สร้างรูปปก
     log("Step 6: NanoBanana...")
     img_resp = kie_api("/api/v1/jobs/createTask", {
-        "model": "nano-banana-2",
+        "model": "seedream/5-lite-text-to-image",
         "task_type": "text-to-image",
-        "input": {"prompt": image_prompt, "aspect_ratio": "16:9"},
+        "input": {"prompt": image_prompt, "aspect_ratio": "16:9", "quality": "high"},
     })
     img_task = img_resp.get("data", {}).get("taskId", "")
     image_url = poll_image(img_task) if img_task else ""
