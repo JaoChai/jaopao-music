@@ -41,6 +41,10 @@ Step 8: KIE Upload
 Step 9: Zernio → YouTube
 Step 10: Notify Telegram + Save Lesson
 
+## YouTube Title Format
+`{ชื่อไทย} ({ชื่ออังกฤษ}) JaoPao | Official Music Audio`
+ตัวอย่าง: ทำไมแค่ฉันคนเดียวไม่พอ (Why Am I Never Enough) JaoPao | Official Music Audio
+
 ## APIs
 
 ### KIE Suno V5 (เพลง)
@@ -77,7 +81,7 @@ Step 10: Notify Telegram + Save Lesson
 - Error → log + แจ้ง Telegram ทุก type (402/429/455/501)
 
 ### Learning Inject
-- อ่าน lessons.jsonl + evolution_log.md
+- อ่าน lessons.md + evolution_log.md
 - ใส่กลับเข้า concept prompt
 - Save lesson หลังทุก run
 

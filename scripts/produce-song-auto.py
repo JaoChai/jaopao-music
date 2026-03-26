@@ -57,6 +57,15 @@ SONG_STRUCTURE = """[Intro] [Lofi Crackle]
 
 MOODS = ["Warm", "Regretful", "Intimate", "Romantic", "Emotional", "Nostalgic", "Melancholic", "Hopeful", "Bittersweet", "Dreamy"]
 
+YOUTUBE_FOOTER = """
+━━━━━━━━━━━━━━━━━━━
+Spotify ค้นได้เลยพิมว่า : เจ้าเปา ได้เลยนะจั๊บ
+
+ฝากคุณพี่ทุกท่านติดตาม เจ้าเปา (JaoPao) ได้ที่ Tiktok
+
+จิ้มเบาๆที่นี้นะคร้าฟ : https://www.tiktok.com/@jaopaodogsong
+━━━━━━━━━━━━━━━━━━━"""
+
 LESSONS_FILE = "/Users/jaochai/.openclaw/workspace-music/memory/lessons.md"
 EVOLUTION_LOG = "/Users/jaochai/.openclaw/workspace-music/memory/evolution_log.md"
 
@@ -218,7 +227,7 @@ def save_lesson(lesson_text):
 
 
 def poll_image(task_id):
-    """Poll NanoBanana task until done. 15s interval, max 15 polls = 3.75 min."""
+    """Poll SeedDream 5 Lite task until done. 15s interval, max 15 polls = 3.75 min."""
     import time
     for i in range(15):
         time.sleep(15)
@@ -416,19 +425,23 @@ mood: {concept.get('mood', mood)}
         return poll_image(img_task) if img_task else ""
 
     def do_seo():
+        # YouTube title format: {ชื่อไทย} ({ชื่ออังกฤษ}) JaoPao | Official Music Audio
+        yt_title = f"{concept['title']} ({concept.get('title_en', '')}) JaoPao | Official Music Audio"
         seo_raw = ask_spark(
-            f"เขียน YouTube SEO สำหรับเพลง \"{concept['title']}\" แนว {GENRE} ตอบ JSON: {{\"seo_title\": \"ชื่อ YouTube ไม่เกิน 100 ตัว + emoji\", \"seo_description\": \"เนื้อเพลง + hashtags\"}}",
-            system="เขียน YouTube SEO ตอบ JSON เท่านั้น"
+            f"เขียน YouTube description สำหรับเพลง \"{concept['title']}\" แนว {GENRE} concept: {concept.get('concept','')} ตอบ JSON: {{\"seo_description\": \"description ที่มีเนื้อเพลง + hashtags + credit เจ้าเปา\"}}",
+            system="เขียน YouTube SEO description ตอบ JSON เท่านั้น"
         )
         try:
             if "```" in seo_raw:
                 seo_raw_clean = seo_raw.split("```")[1]
                 if seo_raw_clean.startswith("json"):
                     seo_raw_clean = seo_raw_clean[4:]
-                return json.loads(seo_raw_clean.strip())
-            return json.loads(seo_raw.strip())
+                parsed = json.loads(seo_raw_clean.strip())
+            else:
+                parsed = json.loads(seo_raw.strip())
+            return {"seo_title": yt_title, "seo_description": parsed.get("seo_description", lyrics[:500])}
         except:
-            return {"seo_title": f"{concept['title']} 🎷 | เจ้าเปา Music", "seo_description": lyrics[:500]}
+            return {"seo_title": yt_title, "seo_description": lyrics[:500]}
 
     with ThreadPoolExecutor(max_workers=3) as executor:
         future_suno = executor.submit(do_suno)
@@ -515,7 +528,7 @@ mood: {concept.get('mood', mood)}
     if publish_youtube:
         log("Step 9: YouTube...")
         yt_json = json.dumps({
-            "content": seo.get("seo_description", "")[:2000],
+            "content": (seo.get("seo_description", "") + YOUTUBE_FOOTER)[:2000],
             "title": seo.get("seo_title", concept["title"]),
             "mediaUrls": [video_url],
             "platforms": [{"platform": "youtube", "accountId": YOUTUBE_ACCOUNT}],

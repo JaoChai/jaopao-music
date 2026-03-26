@@ -17,6 +17,15 @@ BOT_TOKEN = "8376969560:AAH2rJtldj8fpLaByB20znOghQAPLgiHUPw"
 OWNER_CHAT_ID = 5611560704
 MUSIC_PROMPT = "Retro Thai Soul Pop, Lofi Funk, 80 BPM, F#m, Electric Piano Chorus FX, Soft Jazz Drums, Warm Bass, Clean Guitar, Saxophone, Vintage Synth Pad, Smooth Male Thai Vocal, Slow Rap"
 
+YOUTUBE_FOOTER = """
+━━━━━━━━━━━━━━━━━━━
+Spotify ค้นได้เลยพิมว่า : เจ้าเปา ได้เลยนะจั๊บ
+
+ฝากคุณพี่ทุกท่านติดตาม เจ้าเปา (JaoPao) ได้ที่ Tiktok
+
+จิ้มเบาๆที่นี้นะคร้าฟ : https://www.tiktok.com/@jaopaodogsong
+━━━━━━━━━━━━━━━━━━━"""
+
 
 def log(msg):
     print(f"[API] {msg}", flush=True)
@@ -106,7 +115,7 @@ def main():
     lyrics = params["lyrics"]
     suno_style = params.get("suno_style", MUSIC_PROMPT)
     image_prompt = params["image_prompt"]
-    seo_title = params.get("seo_title", f"{title} 🎷 | เจ้าเปา Music")
+    seo_title = params.get("seo_title", f"{title} ({title_en}) JaoPao | Official Music Audio")
     seo_desc = params.get("seo_description", lyrics[:500])
     publish = params.get("publish", False)
 
@@ -189,7 +198,7 @@ def main():
     yt_url = ""
     if publish:
         log("Publishing YouTube...")
-        yt_json = json.dumps({"content": seo_desc[:2000], "title": seo_title,
+        yt_json = json.dumps({"content": (seo_desc + YOUTUBE_FOOTER)[:2000], "title": seo_title,
             "mediaUrls": [video_url], "platforms": [{"platform": "youtube", "accountId": YOUTUBE_ACCOUNT}]})
         try:
             yt_resp = json.loads(urllib.request.urlopen(urllib.request.Request(
